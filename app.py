@@ -3,8 +3,8 @@ import os
 import itertools
 import pandas as pd
 import matplotlib.pyplot as plt
-import sys
-
+import pdfplumber
+import docx
 
 from core.preprocessing import preprocess_code
 from core.ast_similarity import ast_similarity
@@ -19,55 +19,115 @@ from core.ai_signals import (
 )
 from core.ai_detector import ai_assistance_score
 
+
+# ================= CONFIG =================
 UPLOAD_DIR = "temp_uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ---------------- UI ----------------
+SUPPORTED_EXTENSIONS = [
+    "py", "java", "c", "cpp", "js", "ts", "cs",
+    "txt", "pdf", "docx"
+]
+
+
+# ================= HELPERS =================
+def get_extension(filename):
+    return filename.rsplit(".", 1)[-1].lower()
+
+
+def read_txt(path):
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        return f.read()
+
+
+def read_pdf(path):
+    text = ""
+    with pdfplumber.open(path) as pdf:
+        for page in pdf.pages:
+            if page.extract_text():
+                text += page.extract_text() + "\n"
+    return text
+
+
+def read_docx(path):
+    document = docx.Document(path)
+    return "\n".join(p.text for p in document.paragraphs)
+
+
+# ================= UI =================
 st.set_page_config(layout="wide")
-st.title("Hybrid Code Plagiarism Detection System")
-st.caption("Similarity + AI-assisted plagiarism pattern detection")
+st.title("Hybrid Code & Document Plagiarism Detection System")
+st.caption("Supports Code (Python, Java, C/C++) + Documents (PDF, DOCX, TXT)")
 
-# ---------------- SESSION STATE ----------------
-if "analysis_done" not in st.session_state:
-    st.session_state.analysis_done = False
+
+# ================= SESSION =================
+if "done" not in st.session_state:
+    st.session_state.done = False
     st.session_state.df = None
-    st.session_state.explanation_map = None
+    st.session_state.explanations = None
 
+
+# ================= FILE UPLOAD =================
 uploaded_files = st.file_uploader(
-    "Upload Python files (minimum 2)",
-    type=["py"],
+    "Upload files (minimum 2)",
+    type=SUPPORTED_EXTENSIONS,
     accept_multiple_files=True
 )
 
-# ---------------- ANALYSIS ----------------
+
+# ================= ANALYSIS =================
 if st.button("Analyze"):
     if not uploaded_files or len(uploaded_files) < 2:
-        st.warning("Please upload at least two Python files.")
+        st.warning("Please upload at least two files.")
     else:
-        code_map = {}
+        content_map = {}
+        ext_map = {}
 
+        # ---------- LOAD FILES ----------
         for file in uploaded_files:
-            content = file.read().decode("utf-8", errors="ignore")
-            clean_code = preprocess_code(content)
+            ext = get_extension(file.name)
+            save_path = os.path.join(UPLOAD_DIR, file.name)
 
-            path = os.path.join(UPLOAD_DIR, file.name)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(clean_code)
+            with open(save_path, "wb") as f:
+                f.write(file.read())
 
-            code_map[file.name] = clean_code
+            if ext == "py":
+                raw = read_txt(save_path)
+                content = preprocess_code(raw)
 
-        summary_rows = []
-        explanation_map = {}
+            elif ext in ["java", "c", "cpp", "js", "ts", "cs", "txt"]:
+                content = read_txt(save_path)
 
-        for a, b in itertools.combinations(code_map.keys(), 2):
-            # -------- Similarity --------
-            lex = lexical_similarity(code_map[a], code_map[b])
-            ast = ast_similarity(code_map[a], code_map[b])
+            elif ext == "pdf":
+                content = read_pdf(save_path)
 
-            # -------- AI Signals (per file A) --------
-            id_div = identifier_diversity(code_map[a])
-            fmt = formatting_consistency(code_map[a])
-            logic = logic_density(code_map[a])
+            elif ext == "docx":
+                content = read_docx(save_path)
+
+            else:
+                content = ""
+
+            content_map[file.name] = content
+            ext_map[file.name] = ext
+
+        rows = []
+        explanations = {}
+
+        # ---------- COMPARE ----------
+        for a, b in itertools.combinations(content_map.keys(), 2):
+            ext_a = ext_map[a]
+            ext_b = ext_map[b]
+
+            lex = lexical_similarity(content_map[a], content_map[b])
+
+            if ext_a == "py" and ext_b == "py":
+                ast = ast_similarity(content_map[a], content_map[b])
+                id_div = identifier_diversity(content_map[a])
+                fmt = formatting_consistency(content_map[a])
+                logic = logic_density(content_map[a])
+            else:
+                ast = 0.0
+                id_div = fmt = logic = 0.5
 
             ai_score = ai_assistance_score(
                 lexical=lex,
@@ -80,74 +140,55 @@ if st.button("Analyze"):
             verdict = classify_plagiarism(lex, ast, ai_score)
 
             explanation = generate_explanation(
-                a,
-                b,
-                lex,
-                ast,
-                ai_score,
-                id_div,
-                fmt,
-                logic
+                a, b, lex, ast, ai_score, id_div, fmt, logic
+            )
+            explanation.append(
+                f"File types compared: {ext_a.upper()} vs {ext_b.upper()}"
             )
 
-            summary_rows.append([
-                a,
-                b,
+            rows.append([
+                a, b,
                 round(lex, 2),
                 round(ast, 2),
                 round(ai_score, 2),
                 verdict
             ])
 
-            explanation_map[(a, b)] = explanation
+            explanations[(a, b)] = explanation
 
         st.session_state.df = pd.DataFrame(
-            summary_rows,
+            rows,
             columns=[
                 "File A",
                 "File B",
                 "Lexical Similarity (%)",
                 "Structural Similarity (%)",
-                "AI-Assistance Score",
+                "AI Assistance Score",
                 "Verdict"
             ]
         )
 
-        st.session_state.explanation_map = explanation_map
-        st.session_state.analysis_done = True
+        st.session_state.explanations = explanations
+        st.session_state.done = True
 
-# ---------------- RESULTS ----------------
-if st.session_state.analysis_done:
+
+# ================= RESULTS =================
+if st.session_state.done:
     df = st.session_state.df
-    explanation_map = st.session_state.explanation_map
+    explanations = st.session_state.explanations
 
-    st.subheader("Similarity & AI Analysis Summary")
+    st.subheader("Similarity Summary")
     st.dataframe(df, use_container_width=True)
 
-    # -------- EXPLANATION --------
-    st.subheader("Why was this result given?")
-
-    explain_pair = st.selectbox(
-        "Select file pair for explanation",
-        list(explanation_map.keys()),
-        key="explain_pair"
-    )
-
-    for line in explanation_map[explain_pair]:
+    st.subheader("Explanation")
+    pair = st.selectbox("Select file pair", list(explanations.keys()))
+    for line in explanations[pair]:
         st.write("•", line)
 
-    # -------- GRAPH --------
     st.subheader("Visual Comparison")
-
-    graph_pair = st.selectbox(
-        "Select file pair for graph",
-        list(explanation_map.keys()),
-        key="graph_pair"
-    )
-
     row = df[
-        (df["File A"] == graph_pair[0]) &
-        (df["File B"] == graph_pair[1])
+        (df["File A"] == pair[0]) &
+        (df["File B"] == pair[1])
     ].iloc[0]
 
     fig, ax = plt.subplots()
@@ -156,11 +197,11 @@ if st.session_state.analysis_done:
         [
             row["Lexical Similarity (%)"],
             row["Structural Similarity (%)"],
-            row["AI-Assistance Score"] * 100
+            row["AI Assistance Score"] * 100
         ]
     )
     ax.set_ylim(0, 100)
     ax.set_ylabel("Percentage")
-    ax.set_title(f"{graph_pair[0]} vs {graph_pair[1]}")
+    ax.set_title(f"{pair[0]} vs {pair[1]}")
 
     st.pyplot(fig)

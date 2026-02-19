@@ -1,4 +1,6 @@
 streamlit
+matplotlib
+python-docx
 pdfplumber
 PyPDF2
 scikit-learn

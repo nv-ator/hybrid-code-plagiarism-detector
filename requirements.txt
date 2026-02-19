@@ -1,4 +1,6 @@
 streamlit
+pdfplumber
+PyPDF2
+scikit-learn
+numpy
 pandas
-matplotlib
-copydetect

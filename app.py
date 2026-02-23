@@ -79,97 +79,109 @@ uploaded_files = st.file_uploader(
 if st.button("Analyze"):
     if not uploaded_files or len(uploaded_files) < 2:
         st.warning("Please upload at least two files.")
-    else:
-        content_map = {}
-        ext_map = {}
+        st.stop()
 
-        # ---------- LOAD FILES ----------
-        for file in uploaded_files:
-            ext = get_extension(file.name)
-            save_path = os.path.join(UPLOAD_DIR, file.name)
+    # ✅ SAME FILE UPLOAD CHECK (IMPORTANT)
+    file_names = [f.name for f in uploaded_files]
+    if len(file_names) != len(set(file_names)):
+        st.error("Same file uploaded multiple times. Please upload different files.")
+        st.stop()
 
-            with open(save_path, "wb") as f:
-                f.write(file.read())
+    content_map = {}
+    ext_map = {}
 
-            if ext == "py":
-                raw = read_txt(save_path)
-                content = preprocess_code(raw)
+    # ---------- LOAD FILES ----------
+    for file in uploaded_files:
+        ext = get_extension(file.name)
+        save_path = os.path.join(UPLOAD_DIR, file.name)
 
-            elif ext in ["java", "c", "cpp", "js", "ts", "cs", "txt"]:
-                content = read_txt(save_path)
+        with open(save_path, "wb") as f:
+            f.write(file.read())
 
-            elif ext == "pdf":
-                content = read_pdf(save_path)
+        if ext == "py":
+            raw = read_txt(save_path)
+            content = preprocess_code(raw)
 
-            elif ext == "docx":
-                content = read_docx(save_path)
+        elif ext in ["java", "c", "cpp", "js", "ts", "cs", "txt"]:
+            content = read_txt(save_path)
 
-            else:
-                content = ""
+        elif ext == "pdf":
+            content = read_pdf(save_path)
 
-            content_map[file.name] = content
-            ext_map[file.name] = ext
+        elif ext == "docx":
+            content = read_docx(save_path)
 
-        rows = []
-        explanations = {}
+        else:
+            content = ""
 
-        # ---------- COMPARE ----------
-        for a, b in itertools.combinations(content_map.keys(), 2):
-            ext_a = ext_map[a]
-            ext_b = ext_map[b]
+        content_map[file.name] = content
+        ext_map[file.name] = ext
 
-            lex = lexical_similarity(content_map[a], content_map[b])
+    rows = []
+    explanations = {}
 
-            if ext_a == "py" and ext_b == "py":
-                ast = ast_similarity(content_map[a], content_map[b])
-                id_div = identifier_diversity(content_map[a])
-                fmt = formatting_consistency(content_map[a])
-                logic = logic_density(content_map[a])
-            else:
-                ast = 0.0
-                id_div = fmt = logic = 0.5
+    # ---------- COMPARE ----------
+    for a, b in itertools.combinations(content_map.keys(), 2):
+        ext_a = ext_map[a]
+        ext_b = ext_map[b]
 
-            ai_score = ai_assistance_score(
-                lexical=lex,
-                structural=ast,
-                id_div=id_div,
-                fmt=fmt,
-                logic=logic
-            )
+        lex = lexical_similarity(content_map[a], content_map[b])
 
-            verdict = classify_plagiarism(lex, ast, ai_score)
+        if ext_a == "py" and ext_b == "py":
+            ast = ast_similarity(content_map[a], content_map[b])
+            id_div = identifier_diversity(content_map[a])
+            fmt = formatting_consistency(content_map[a])
+            logic = logic_density(content_map[a])
+        else:
+            ast = 0.0
+            id_div = fmt = logic = 0.5
 
-            explanation = generate_explanation(
-                a, b, lex, ast, ai_score, id_div, fmt, logic
-            )
-            explanation.append(
-                f"File types compared: {ext_a.upper()} vs {ext_b.upper()}"
-            )
-
-            rows.append([
-                a, b,
-                round(lex, 2),
-                round(ast, 2),
-                round(ai_score, 2),
-                verdict
-            ])
-
-            explanations[(a, b)] = explanation
-
-        st.session_state.df = pd.DataFrame(
-            rows,
-            columns=[
-                "File A",
-                "File B",
-                "Lexical Similarity (%)",
-                "Structural Similarity (%)",
-                "AI Assistance Score",
-                "Verdict"
-            ]
+        ai_score = ai_assistance_score(
+            lexical=lex,
+            structural=ast,
+            id_div=id_div,
+            fmt=fmt,
+            logic=logic
         )
 
-        st.session_state.explanations = explanations
-        st.session_state.done = True
+        verdict = classify_plagiarism(lex, ast, ai_score)
+
+        explanation = generate_explanation(
+            a, b, lex, ast, ai_score, id_div, fmt, logic
+        )
+        explanation.append(
+            f"File types compared: {ext_a.upper()} vs {ext_b.upper()}"
+        )
+
+        rows.append([
+            a, b,
+            round(lex, 2),
+            round(ast, 2),
+            round(ai_score, 2),
+            verdict
+        ])
+
+        explanations[(a, b)] = explanation
+
+    # ✅ NO VALID PAIRS CHECK
+    if not rows:
+        st.error("No valid file pairs found for comparison.")
+        st.stop()
+
+    st.session_state.df = pd.DataFrame(
+        rows,
+        columns=[
+            "File A",
+            "File B",
+            "Lexical Similarity (%)",
+            "Structural Similarity (%)",
+            "AI Assistance Score",
+            "Verdict"
+        ]
+    )
+
+    st.session_state.explanations = explanations
+    st.session_state.done = True
 
 
 # ================= RESULTS =================
@@ -181,7 +193,18 @@ if st.session_state.done:
     st.dataframe(df, use_container_width=True)
 
     st.subheader("Explanation")
+
+    # ✅ EMPTY EXPLANATION GUARD
+    if not explanations:
+        st.warning("No comparison available. Please upload two different files.")
+        st.stop()
+
     pair = st.selectbox("Select file pair", list(explanations.keys()))
+
+    if pair is None:
+        st.warning("Please select a valid file pair.")
+        st.stop()
+
     for line in explanations[pair]:
         st.write("•", line)
 

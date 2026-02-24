@@ -6,7 +6,6 @@ import matplotlib.pyplot as plt
 import pdfplumber
 import docx
 import time
-import seaborn as sns
 
 from core.preprocessing import preprocess_code
 from core.ast_similarity import ast_similarity
@@ -31,7 +30,6 @@ SUPPORTED_EXTENSIONS = [
     "txt", "pdf", "docx"
 ]
 
-
 # ================= PAGE CONFIG =================
 st.set_page_config(
     page_title="PRISM - Plagiarism Detection",
@@ -50,9 +48,9 @@ with st.sidebar:
     )
 
     st.markdown("---")
-
     st.subheader("⚙ Detection Settings")
-    lex_threshold = st.slider("Lexical Threshold", 0, 100, 50)
+
+    lex_threshold = st.slider("Lexical Threshold (%)", 0, 100, 50)
     ai_threshold = st.slider("AI Sensitivity", 0.0, 1.0, 0.65)
 
     st.markdown("---")
@@ -60,7 +58,7 @@ with st.sidebar:
     st.caption("Hybrid Plagiarism Intelligence Engine")
 
 
-# ================= HERO SECTION =================
+# ================= HERO =================
 st.markdown("# 🔎 PRISM")
 st.markdown("### Plagiarism Recognition & Integrated Similarity Mapping")
 st.markdown(
@@ -72,21 +70,21 @@ st.divider()
 # ================= WHAT IS PLAGIARISM =================
 with st.expander("📘 What is Plagiarism?"):
     st.markdown("""
-Plagiarism is presenting someone else's work, ideas, or structure as your own without proper attribution.
+Plagiarism is presenting someone else's work as your own without attribution.
 
-In programming and documentation, plagiarism may include:
+Common forms include:
 
-• Direct copying of source code  
-• Renaming variables but preserving logic  
-• Reordering functions while keeping same structure  
+• Direct copying  
+• Renamed variables but identical logic  
+• Structural refactoring  
 • AI-assisted rewriting  
-• Copying document content without citation  
+• Document copying without citation  
 
-PRISM detects plagiarism using:
+PRISM evaluates:
 
 ✔ Lexical Similarity  
 ✔ Structural Similarity (Python)  
-✔ AI-Assistance Heuristic Signals  
+✔ AI Behavioral Heuristics  
 """)
 
 
@@ -114,14 +112,14 @@ def read_docx(path):
     return "\n".join(p.text for p in document.paragraphs)
 
 
-# ================= SESSION =================
+# ================= SESSION STATE =================
 if "done" not in st.session_state:
     st.session_state.done = False
     st.session_state.df = None
     st.session_state.explanations = None
 
 
-# ================= ANALYZE BUTTON =================
+# ================= ANALYZE =================
 if st.sidebar.button("🚀 Analyze Files"):
 
     if not uploaded_files or len(uploaded_files) < 2:
@@ -130,7 +128,7 @@ if st.sidebar.button("🚀 Analyze Files"):
 
     file_names = [f.name for f in uploaded_files]
     if len(file_names) != len(set(file_names)):
-        st.error("Duplicate file detected. Please upload different files.")
+        st.error("Duplicate file detected.")
         st.stop()
 
     content_map = {}
@@ -139,7 +137,7 @@ if st.sidebar.button("🚀 Analyze Files"):
     progress = st.progress(0)
     status = st.empty()
 
-    # ---------- LOAD FILES ----------
+    # ---------- LOAD ----------
     for i, file in enumerate(uploaded_files):
         ext = get_extension(file.name)
         save_path = os.path.join(UPLOAD_DIR, file.name)
@@ -214,6 +212,10 @@ if st.sidebar.button("🚀 Analyze Files"):
 
         explanations[(a, b)] = explanation
 
+    if not rows:
+        st.error("No valid comparisons found.")
+        st.stop()
+
     st.session_state.df = pd.DataFrame(
         rows,
         columns=[
@@ -255,56 +257,67 @@ if st.session_state.done:
         by="Lexical Similarity (%)",
         ascending=False
     )
-    st.dataframe(df_sorted, use_container_width=True)
+    st.dataframe(df_sorted, width="stretch")
 
     st.divider()
 
     st.subheader("🔍 Detailed Analysis")
-    pair = st.selectbox("Select file pair", list(explanations.keys()))
 
-    st.markdown(f"### {pair[0]}  ↔  {pair[1]}")
+    if explanations:
+        pair = st.selectbox(
+            "Select file pair",
+            options=list(explanations.keys())
+        )
 
-    for line in explanations[pair]:
-        st.markdown(f"- {line}")
+        if pair:
+            st.markdown(f"### {pair[0]}  ↔  {pair[1]}")
+            for line in explanations[pair]:
+                st.markdown(f"- {line}")
 
-    st.divider()
+            st.divider()
+            st.subheader("📈 Visual Comparison")
 
-    st.subheader("📈 Visual Comparison")
+            row = df[
+                (df["File A"] == pair[0]) &
+                (df["File B"] == pair[1])
+            ].iloc[0]
 
-    row = df[
-        (df["File A"] == pair[0]) &
-        (df["File B"] == pair[1])
-    ].iloc[0]
+            fig, ax = plt.subplots()
 
-    fig, ax = plt.subplots()
+            ax.bar(
+                ["Lexical", "Structural", "AI Score"],
+                [
+                    row["Lexical Similarity (%)"],
+                    row["Structural Similarity (%)"],
+                    row["AI Assistance Score"] * 100
+                ]
+            )
 
-    ax.bar(
-        ["Lexical", "Structural", "AI Score"],
-        [
-            row["Lexical Similarity (%)"],
-            row["Structural Similarity (%)"],
-            row["AI Assistance Score"] * 100
-        ],
-        color=["#1f77b4", "#ff7f0e", "#2ca02c"]
-    )
+            ax.set_ylim(0, 100)
+            ax.set_ylabel("Percentage")
+            ax.set_title("Similarity Breakdown")
 
-    ax.set_ylim(0, 100)
-    ax.set_ylabel("Percentage")
-    ax.set_title("Similarity Breakdown")
+            st.pyplot(fig)
 
-    st.pyplot(fig)
+            # ---------- Heatmap without seaborn ----------
+            st.subheader("🔥 Similarity Heatmap")
 
-    st.subheader("🔥 Similarity Heatmap")
+            pivot = df.pivot(
+                index="File A",
+                columns="File B",
+                values="Lexical Similarity (%)"
+            ).fillna(0)
 
-    pivot = df.pivot(
-        index="File A",
-        columns="File B",
-        values="Lexical Similarity (%)"
-    )
+            fig2, ax2 = plt.subplots()
+            cax = ax2.imshow(pivot, cmap="coolwarm")
+            plt.colorbar(cax)
 
-    fig2, ax2 = plt.subplots()
-    sns.heatmap(pivot, annot=True, cmap="coolwarm", ax=ax2)
-    st.pyplot(fig2)
+            ax2.set_xticks(range(len(pivot.columns)))
+            ax2.set_yticks(range(len(pivot.index)))
+            ax2.set_xticklabels(pivot.columns, rotation=45)
+            ax2.set_yticklabels(pivot.index)
+
+            st.pyplot(fig2)
 
 
 # ================= FAQ =================
@@ -313,30 +326,29 @@ st.subheader("❓ Frequently Asked Questions")
 
 with st.expander("Does PRISM detect AI-generated content?"):
     st.write("""
-PRISM does not directly classify text as AI-generated.
-Instead, it analyzes behavioral signals such as identifier diversity,
-format consistency, and logic density.
+PRISM evaluates behavioral patterns such as identifier diversity,
+formatting consistency, and logic density to estimate AI assistance.
 """)
 
 with st.expander("Why is structural similarity zero for non-Python files?"):
     st.write("""
-Structural similarity is currently supported only for Python files.
-Other file types are evaluated using lexical similarity.
+Structural comparison is currently supported only for Python.
+Other file types use lexical similarity.
 """)
 
-with st.expander("What similarity score indicates plagiarism?"):
+with st.expander("What score indicates plagiarism?"):
     st.write("""
-Above 80% indicates high similarity.
-50–80% indicates moderate similarity.
-Below 50% indicates low similarity.
-Interpretation depends on context.
+Above 80% → High similarity  
+50–80% → Moderate similarity  
+Below 50% → Low similarity  
+Context always matters.
 """)
 
 
 # ================= FOOTER =================
 st.markdown("""
 ---
-© 2025 PRISM  
+© 2026 PRISM  
 Developed by **Ujjwal**  
-GitHub-style Hybrid Plagiarism Intelligence Engine
+Hybrid Plagiarism Intelligence Engine
 """)
